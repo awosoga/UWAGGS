@@ -5,14 +5,13 @@ output: slidy_presentation
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(echo = T)
 ```
 
 ## Data Acquisition Techniques
 
 When data is not readily available from existing packages or official API's, multiple
-approaches can be used to extract data. We will cover some
-of these methods today.
+approaches can be used to extract data. We will cover some of these methods today.
 
 **This presentation is a close adaptation of Hadley Wickham's [Scraping websites with R](https://github.com/hadley/web-scraping/blob/main/rvest.pdf) talk. Check it out!**
 
@@ -58,7 +57,7 @@ https://fibalivestats.dcd.shared.geniussports.com/u/CEBL/2301299/bs.html
 ## Static HTML Scraping
 
 Scraping static HTML is easiest when it is already formatted as a `table` element. In
-this case, then we simply use `rvest::html_table`, which will return a dataframe or list
+this case, we can simply use `rvest::html_table`, to return a dataframe or list
 of data frames.
 
 ```{r few tables, message=FALSE, warning=FALSE}
@@ -66,9 +65,7 @@ library(tidyverse)
 library(rvest)
 
 cebl_boxscore <- "https://hosted.dcd.shared.geniussports.com/CEBL/en/match/2301299/boxscore?"
-
 page <- read_html(cebl_boxscore)
-
 page %>% html_table() #%>% bind_rows()
 ```
 
@@ -78,11 +75,8 @@ to filter the tables.
 ```{r many tables}
 
 swim_rankings <- "https://www.swimrankings.net/index.php?page=rankingDetail&club=EU"
-
 page <- read_html(swim_rankings)
-
 page %>%  html_table() # Lots of tables
-
 swim_rankings_table <- page %>% html_elements(".rankingList") %>%  html_table() %>% pluck(1)
 
 ```
@@ -124,14 +118,13 @@ Here is another example where we remedy these concerns by extracting specific el
 
 ```{r WBB from table}
 wbb <- "https://universitysport.prestosports.com/sports/wbkb/2023-24/teams/waterloo?tmpl=teaminfo-network-monospace-template&sort=ptspg"
-
 wbb_season <- wbb %>% read_html()
-
 wbb_season %>% html_table()
 
 # Here, there is a lot of unnecessary information in the extracted table.
 # In this case, I could have simply filtered rows and taken the first row to be headers.
 ```
+Instead, let's recreate the table from scratch using selectors.
 
 ```{r WBB from scratch, warning=FALSE}
 
@@ -139,19 +132,18 @@ wbb_season %>% html_table()
 
 scrape_data <- function(url, css_selection) {
   return(url %>% read_html() %>% 
-           html_elements(css_selection) %>% html_text())
+           html_elements(css_selection) %>% html_text2())
 }
-
 clean_data <- function(dirty_data) {
   return(sapply(dirty_data, str_remove_all,"[\n\t\\s]"))
 }
-
 formatted_season <- function(year) {
   return(
     paste0(year, "-", (year - (round(year,-2))+1))
   )
 }
 
+# Main Function
 get_team_data <- function(team_info, year, gender) {
   
     ## Section 1: Specifying the url for desired website to be scraped
@@ -246,16 +238,15 @@ write_xlsx(waterloo_table, "waterloo.xlsx", col_names = T)
 ```{r Piggyback Example, eval=FALSE}
 library(piggyback)
 
-pb_new_release("awosoga/uwaggs", "v0.0.1")
-pb_upload("waterloo.rds", repo = "awosoga/uwaggs", tag = "v0.0.1")
-pb_download(file = "waterloo.rds", tag = "v0.0.1")
-
-
+pb_new_release("awosoga/UWAGGS", "v0.0.1")
+pb_upload("waterloo.rds", repo = "awosoga/UWAGGS", tag = "v0.0.1")
+pb_download(file = "waterloo.rds", tag = "v0.0.1", 
+            repo = "awosoga/UWAGGS")
+piggybacked_file <- read_rds("waterloo.rds")
 
 ```
 
-Working Example: 
-
+Working Example: [ceblR](https://github.com/awosoga/ceblR)
 
 <!-- ## Not Included -->
 
