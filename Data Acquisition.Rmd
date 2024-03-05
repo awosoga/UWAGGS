@@ -1,0 +1,281 @@
+---
+title: "Data Acquisition, Part 2"
+author: "David Awosoga"
+output: slidy_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Data Acquisition Techniques
+
+When data is not readily available from existing packages or official API's, multiple
+approaches can be used to extract data. We will cover some
+of these methods today.
+
+**This presentation is a close adaptation of Hadley Wickham's [Scraping websites with R](https://github.com/hadley/web-scraping/blob/main/rvest.pdf) talk. Check it out!**
+
+<!-- ## Preamble: Scraping Ethics and Legality -->
+
+<!-- - Refer to [R4DS](https://r4ds.hadley.nz/webscraping#scraping-ethics-and-legalities) -->
+
+## What is HTML?
+
+- HTML stands for "HyperText Markup Language".
+- It's the language of the web that describes the structure of web pages
+- HTML is a tree, and is made up of elements. The content that you see on a web
+page comes from the body.
+- To view a tree on a webpage, use "Developer Tools" or right-click and choose "Inspect".
+
+### Example of HTML
+
+https://www.hockey-reference.com/
+
+- Comments:
+  - tree structure
+  - HTML elements
+  - body information
+  - identifying information from the elements on the page
+
+## HTML Generation Types
+
+- HTML can either be generated *statically* or *dynamically*.
+- HTML that is generated statically can usually be extracted straight from the 
+source page, meaning that it doesn't change.
+- However, when a website incorporates continuous updating, such as a live boxscore,
+the HTML is generated dynamically using JavaScript.
+
+### Example of Dynamically Updating HTML
+
+https://fibalivestats.dcd.shared.geniussports.com/u/CEBL/2301299/bs.html
+
+- Comments: 
+  - iframe element
+  - javascript signature
+  - input field
+
+## Static HTML Scraping
+
+Scraping static HTML is easiest when it is already formatted as a `table` element. In
+this case, then we simply use `rvest::html_table`, which will return a dataframe or list
+of data frames.
+
+```{r few tables, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(rvest)
+
+cebl_boxscore <- "https://hosted.dcd.shared.geniussports.com/CEBL/en/match/2301299/boxscore?"
+
+page <- read_html(cebl_boxscore)
+
+page %>% html_table() #%>% bind_rows()
+```
+
+However, there can be many tables on a page, and we need to specify a robust way
+to filter the tables.
+
+```{r many tables}
+
+swim_rankings <- "https://www.swimrankings.net/index.php?page=rankingDetail&club=EU"
+
+page <- read_html(swim_rankings)
+
+page %>%  html_table() # Lots of tables
+
+swim_rankings_table <- page %>% html_elements(".rankingList") %>%  html_table() %>% pluck(1)
+
+```
+
+## CSS Selectors
+
+- CSS stands for "cascading style sheets"
+- While HTML generates the actual content of a page, CSS is used to specify 
+the styling (aesthetic design) components.
+- For example, CSS is designates **bold** fonts, formatting options (paragraphs, headers, etc),
+and [hyperlinks](www.google.ca).
+- Using CSS selectors allow us to go through an HTML tree and find specific elements 
+that we are interested in extracting information from.
+- Selector examples: https://www.w3schools.com/cssref/css_selectors.php
+
+## How to find Selectors
+
+- Directly read the html
+- From the developer tools, right-click, choose "Copy Selector", then simplify.
+- [Google Selector Gadget](https://chrome.google.com/webstore/detail/selectorgadget)
+
+## Non-tabular Data
+
+Although using `read_html` is incredibly convenient, there will undoubtedly be 
+use cases where more specified extraction techniques must be used. In these situations, 
+Wickham recommends the following approach:
+
+1. Find the "rows" with `html_elements()`
+2. Find the "columns" wiht `html_element()`
+3. Extract the data with `html_text2()` or `html_attr()`
+4. Make a tibble
+5. Clean it up
+
+### Example: USPORTS Women's Basketball
+
+Recall the CEBL boxscore that we extracted earlier. How are we supposed to know
+which player in on which team? Should the "totals" column really be part of the same table?
+Here is another example where we remedy these concerns by extracting specific elements.
+
+```{r WBB from table}
+wbb <- "https://universitysport.prestosports.com/sports/wbkb/2023-24/teams/waterloo?tmpl=teaminfo-network-monospace-template&sort=ptspg"
+
+wbb_season <- wbb %>% read_html()
+
+wbb_season %>% html_table()
+
+# Here, there is a lot of unnecessary information in the extracted table.
+# In this case, I could have simply filtered rows and taken the first row to be headers.
+```
+
+```{r WBB from scratch, warning=FALSE}
+
+# Helper Functions
+
+scrape_data <- function(url, css_selection) {
+  return(url %>% read_html() %>% 
+           html_elements(css_selection) %>% html_text())
+}
+
+clean_data <- function(dirty_data) {
+  return(sapply(dirty_data, str_remove_all,"[\n\t\\s]"))
+}
+
+formatted_season <- function(year) {
+  return(
+    paste0(year, "-", (year - (round(year,-2))+1))
+  )
+}
+
+get_team_data <- function(team_info, year, gender) {
+  
+    ## Section 1: Specifying the url for desired website to be scraped
+    web_name <-  team_info[1] %>% clean_data() %>% tolower()
+    
+    team_url <- paste0("https://universitysport.prestosports.com/sports/", 
+                      gender, "bkb/", formatted_season(year), "/teams/", web_name, 
+                      "?tmpl=teaminfo-network-monospace-template&sort=ptspg")
+    
+    ## Section 2: Pre-Processing Roster Size and Defining CSS Selectors
+    team_data <- scrape_data(team_url, "td:nth-child(1)") %>% clean_data() 
+    roster_size <- (length(team_data)-7)/2
+
+    team <- ""
+    for (i in 2:(roster_size+1)) {
+       team <- paste0(team, " tr:nth-child(", (2*i), ") td, ")
+    }
+    team <- str_sub(team, 1, -3) #remove the last comma
+    
+    player_stats_data <- team_url %>% scrape_data(team) %>% clean_data()
+
+    col_names <- team_url %>% scrape_data("tr+ tr th") %>% clean_data() 
+
+    ## Section 3: Convert into dataframes and perform more cleanup and formatting
+    column_names <- c("No.", "Player",	"GP",	"GS",	"MIN",	"MPG",	"FG", "FGA",	
+              "PCT",	"_3FG", "_3FGA",	"_3_PCT",	"FT", "FTA",	"FT_PCT",	"OFF",	
+              "DEF",	"TOT",	"RPG",	"PF",	"DQ",	"A",	"A/G",	"TO",	"TO/G",	
+              "A/TO",	"BLK",	"BLK/G",	"STL",	"STL/G",	"PTS",	"PPG")
+    
+     player_stats <- data.frame(matrix(unlist(player_stats_data),
+                                  nrow = (length(player_stats_data)/length(col_names)), 
+                                  byrow = TRUE), stringsAsFactors = FALSE)  %>% 
+      separate(X7, c("FG", "FGA"), "-") %>% 
+      separate(X9, c("3FG", "3FGA"), "-") %>% 
+      separate(X11, c("FT", "FTA"), "-") %>%
+      mutate(`X2` = sapply(`X2`,gsub, pattern = "([a-z])([A-Z])", 
+                           replacement = "\\1 \\2")) %>%
+      mutate(`X2` = sapply(`X2`, str_remove_all, "[.]")) %>%
+      mutate(across(c(3:32), as.numeric)) %>% 
+      data.table::setnames(column_names) %>% 
+      mutate(Team = team_info[1], Conference = team_info[2], .before = "No.") %>% 
+       replace_na(list("GS" = 0))
+
+    return(player_stats)
+}
+
+waterloo_table <- get_team_data(c("Waterloo", "OUA") , 2023, "w")
+
+waterloo_table
+```
+
+## Next Steps: Now that you have the data, where do you put it??
+
+1. Save data in a format of your choice
+
+```{r write formats}
+#.csv (comma separated value). Very common storage format due to it's tabular format, great for most dataframes.
+
+write_csv(waterloo_table, "waterloo.csv")
+
+# .rds (R Data Serialization). Useful for saving non-tabular R objects. Also has nice compression options
+
+saveRDS(waterloo_table, "waterloo.rds") # compresses by default
+
+write_rds(waterloo_table, "waterloo.rds") # doesn't compress the data
+
+# .xls or .xlsx (Excel Format) (boooooooo)
+
+library(writexl)
+
+write_xlsx(waterloo_table, "waterloo.xlsx", col_names = T)
+
+```
+
+2. Use a database
+  
+```{r Databases}
+
+# TODO. 
+#Local connection
+
+
+# Remote Connection
+#elephant SQL example
+
+```
+  
+3. Piggyback the data on a GitHub repository
+    - [Vignette](https://cran.r-project.org/web/packages/piggyback/vignettes/intro.html)
+    - Add a GitHub token to extract data from a private repository or introduce rate limiting
+
+```{r Piggyback Example, eval=FALSE}
+library(piggyback)
+
+pb_new_release("awosoga/uwaggs", "v0.0.1")
+pb_upload("waterloo.rds", repo = "awosoga/uwaggs", tag = "v0.0.1")
+pb_download(file = "waterloo.rds", tag = "v0.0.1")
+
+
+
+```
+
+Working Example: 
+
+
+<!-- ## Not Included -->
+
+<!-- - Scraping Multiple Sites and Pages with pagination and url manipulation -->
+<!-- - for loop stuff -->
+<!-- - Responsible Scraping with polite -->
+<!-- - This probably should have been done at the beginning of the presentation -->
+<!-- - Using the `polite` package, with an example -->
+<!-- - making an unofficial api -->
+<!-- - HTTP Requests -->
+<!--   - There are a handful of types of http request methods, but the common ones are `GET` and `POST`. A detailed list is given -->
+<!--   [HERE](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods). -->
+<!--   - "GET" requests information from the resource, solely to retrieve data. -->
+<!--   - `POST` submits information to the resource in order to modify the state or actions -->
+<!-- that the resource takes. -->
+<!--   - use a get request that returns html, like the track rankings -->
+<!--   - example that doesn't: pvf -->
+<!--   - might need a token, so this isn't always possible -->
+<!--   - with some sites, all you need is the webpage. With other sites, you'll need the entire cUrl. -->
+<!-- - Converting JSON to R using `jsonlite` and `purrr` -->
+<!--   - example that works: - volleyball api -->
+<!-- - talk about writing reproducible code and making the least amount of assumptions as possible -->
+<!--   - don't use n'th child and stuff since that might change -->
